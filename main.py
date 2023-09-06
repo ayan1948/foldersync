@@ -1,4 +1,4 @@
-from typing import BinaryIO, List, Iterable
+from typing import BinaryIO, List, Iterable, Type, TypeVar, Callable
 from time import sleep
 from os import remove, walk, scandir
 from os.path import join, exists, relpath
@@ -7,6 +7,8 @@ import hashlib
 import logging
 import sys
 import shutil
+
+T = TypeVar("T", bound=object)
 
 
 def get_hash(file: BinaryIO) -> str:
@@ -33,14 +35,17 @@ def initialize_logger(location) -> logging.Logger:
     """
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
+
+    location = location if location.endswith(".log") else location + "file_sync.log"
     file_handle = logging.FileHandler(location)
+
     file_handle.setLevel(logging.INFO)
     file_handle.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handle)
     return logger
 
 
-def location_check(cls):
+def location_check(cls) -> Callable[..., T]:
     """
     Decorator that checks if the source and replica folders exist.
     :param cls: Class to be decorated.
@@ -49,10 +54,10 @@ def location_check(cls):
     """
 
     def inner(*args):
-        if exists(args[0]) and exists(args[1]):
-            return cls(*args)
-        else:
-            raise NotADirectoryError("The locations does not exist.")
+        for arg in args[:2]:
+            if not exists(arg):
+                raise NotADirectoryError("The locations does not exist.")
+        return cls(*args)
 
     return inner
 
