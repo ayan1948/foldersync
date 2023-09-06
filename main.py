@@ -1,7 +1,7 @@
-from typing import BinaryIO, List, Tuple
+from typing import BinaryIO, List, Iterable
 from time import sleep
-from os import scandir, remove
-from os.path import join, exists
+from os import remove, walk, scandir
+from os.path import join, exists, relpath
 import argparse
 import hashlib
 import logging
@@ -60,26 +60,17 @@ def location_check(cls):
 @location_check
 class FileSync:
     def __init__(self, source: str, replica: str, log: str, time: int):
+        """
+        Initializes the FileSync class.
+        :param source: Source folder.
+        :param replica: Replica folder.
+        :param log: Log file.
+        :param time: Interval between syncs.
+        """
         self.source = source
         self.replica = replica
         self.logger = initialize_logger(log)
         self.interval = time
-
-    def read_folders(self) -> Tuple[List[str], List[str]]:
-        """
-        Reads the source and replica folders and returns the list of files in them.
-
-        :return: Tuple of lists of files in source and replica folders.
-        """
-        source_files: List[str] = list(
-            map(lambda entry: entry.name, filter(lambda entry: entry.is_file(), scandir(self.source)))
-        )
-
-        replica_files: List[str] = list(
-            map(lambda entry: entry.name, filter(lambda entry: entry.is_file(), scandir(self.replica)))
-        )
-
-        return source_files, replica_files
 
     def content_sync(self, source_list: List[str], replica_list: List[str]) -> None:
         """
@@ -91,7 +82,7 @@ class FileSync:
         """
         for file in source_list:
             if file not in replica_list:
-                shutil.copy2(join(self.source, file), self.replica)
+                shutil.copy2(join(self.source, file), join(self.replica, file))
                 self.logger.info(f"File {file} copied to {self.replica}")
             else:
                 source_file = join(self.source, file)
@@ -99,13 +90,53 @@ class FileSync:
                 if get_hash(open(source_file, "rb")) != get_hash(open(replica_file, "rb")):
                     shutil.copy2(source_file, replica_file)
                     self.logger.info(f"File {file} copied to {self.replica}")
-                else:
-                    self.logger.info(f"File {file} already exists in {self.replica}")
 
         for file in replica_list:
             if file not in source_list:
                 remove(join(self.replica, file))
                 self.logger.info(f"File {file} removed from {self.replica}")
+
+    def folder_sync(self, source_list: List[str], replica_list: List[str]) -> None:
+        """
+        Synchronizes the folders in the source and replica folders.
+        :param source_list: list of folders in the source folder.
+        :param replica_list: list of folders in the replica folder.
+
+        :return: None
+        """
+        for folder in source_list:
+            if folder not in replica_list:
+                shutil.copytree(join(self.source, folder), join(self.replica, folder))
+                self.logger.info(f"Folder {folder} copied to {self.replica}")
+
+        for folder in replica_list:
+            if folder not in source_list:
+                shutil.rmtree(join(self.replica, folder))
+                self.logger.info(f"Folder {folder} removed from {self.replica}")
+
+    def run_sync(self) -> None:
+        """
+        Runs the sync operation for the whole directory.
+        :return: None
+        """
+        for source_dir, source_sub_dirs, source_files in walk(self.source, topdown=True):
+            relative_dir = relpath(source_dir, self.source)
+            replica_dir = source_dir.replace(self.source, self.replica)
+
+            if not exists(replica_dir):
+                shutil.copytree(source_dir, replica_dir)
+                self.logger.info(f"Folder {relative_dir} copied to {self.replica}")
+
+            file_iter: Iterable[object] = filter(lambda item: item.is_file(), scandir(replica_dir))
+            replica_sub_files = list(map(lambda item: join(relative_dir, item.name), file_iter))
+            source_files_path = list(map(lambda item: join(relative_dir, item), source_files))
+
+            folder_iter: Iterable[object] = filter(lambda item: item.is_dir(), scandir(replica_dir))
+            replica_sub_dirs = list(map(lambda item: join(relative_dir, item.name), folder_iter))
+            source_dir_path = list(map(lambda item: join(relative_dir, item), source_sub_dirs))
+
+            self.folder_sync(source_dir_path, replica_sub_dirs)
+            self.content_sync(source_files_path, replica_sub_files)
 
     def sync(self) -> None:
         """
@@ -113,10 +144,14 @@ class FileSync:
 
         :return: None
         """
+        counter = 0
         try:
-            while True:
-                source_files, replica_files = self.read_folders()
-                self.content_sync(source_files, replica_files)
+            while counter < 3:
+                try:
+                    self.run_sync()
+                except PermissionError:
+                    print("Permission denied...")
+                    counter += 1
                 sleep(self.interval)
         except KeyboardInterrupt:
             self.logger.info("Stopping file sync...")
@@ -134,5 +169,6 @@ def main():
     sync.sync()
 
 
+# "C:\Users\%User%\Downloads\Documents" "C:\Users\%User%\Downloads\doc_replica"
 if __name__ == "__main__":
     main()
