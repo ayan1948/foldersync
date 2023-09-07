@@ -64,7 +64,7 @@ def location_check(cls) -> Callable[..., T]:
 
 @location_check
 class FileSync:
-    def __init__(self, source: str, replica: str, log: str, time: int):
+    def __init__(self, source: str, replica: str, log: str, time: int) -> None:
         """
         Initializes the FileSync class.
         :param source: Source folder.
@@ -77,6 +77,10 @@ class FileSync:
         self.logger = initialize_logger(log)
         self.interval = time
 
+    def print_and_log(self, message: str) -> None:
+        print(message)
+        self.logger.info(message)
+
     def content_sync(self, source_list: List[str], replica_list: List[str]) -> None:
         """
         Synchronizes the content of the source and replica folders.
@@ -88,18 +92,18 @@ class FileSync:
         for file in source_list:
             if file not in replica_list:
                 shutil.copy2(join(self.source, file), join(self.replica, file))
-                self.logger.info(f"File '{file}' copied to '{self.replica}'")
+                self.print_and_log(f"File '{file}' copied to '{self.replica}'")
             else:
                 source_file = join(self.source, file)
                 replica_file = join(self.replica, file)
                 if get_hash(open(source_file, "rb")) != get_hash(open(replica_file, "rb")):
                     shutil.copy2(source_file, replica_file)
-                    self.logger.info(f"File '{file}' copied to '{self.replica}'")
+                    self.print_and_log(f"File '{file}' copied to '{self.replica}'")
 
         for file in replica_list:
             if file not in source_list:
                 remove(join(self.replica, file))
-                self.logger.info(f"File '{file}' removed from '{self.replica}'")
+                self.print_and_log(f"File '{file}' removed from '{self.replica}'")
 
     def folder_sync(self, source_list: List[str], replica_list: List[str]) -> None:
         """
@@ -112,12 +116,12 @@ class FileSync:
         for folder in source_list:
             if folder not in replica_list:
                 shutil.copytree(join(self.source, folder), join(self.replica, folder))
-                self.logger.info(f"Folder '{folder}' copied to '{self.replica}'")
+                self.print_and_log(f"Folder '{folder}' copied to '{self.replica}'")
 
         for folder in replica_list:
             if folder not in source_list:
                 shutil.rmtree(join(self.replica, folder))
-                self.logger.info(f"Folder '{folder}' removed from '{self.replica}'")
+                self.print_and_log(f"Folder '{folder}' removed from '{self.replica}'")
 
     def run_sync(self) -> None:
         """
@@ -130,7 +134,7 @@ class FileSync:
 
             if not exists(replica_dir):
                 shutil.copytree(source_dir, replica_dir)
-                self.logger.info(f"Folder {relative_dir} copied to {self.replica}")
+                self.print_and_log(f"Folder {relative_dir} copied to {self.replica}")
 
             file_iter: Iterable[object] = filter(lambda item: item.is_file(), scandir(replica_dir))
             replica_sub_files = list(map(lambda item: join(relative_dir, item.name), file_iter))
@@ -155,15 +159,15 @@ class FileSync:
                 try:
                     self.run_sync()
                 except PermissionError:
-                    print("Permission denied...")
+                    self.print_and_log("Permission denied...")
                     counter += 1
                 sleep(self.interval)
         except KeyboardInterrupt:
-            self.logger.info("Stopping file sync...")
+            self.print_and_log("Stopping file sync...")
             sys.exit(0)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Syncs two folders. Usage: python main.py source replica")
     parser.add_argument("source", help="Source folder")
     parser.add_argument("replica", help="Replica folder")
@@ -174,6 +178,6 @@ def main():
     sync.sync()
 
 
-# "C:\Users\%User%\Downloads\Documents" "C:\Users\%User%\Downloads\doc_replica"
+# main.py "C:\Users\%User%\Downloads\Documents" "C:\Users\%User%\Downloads\doc_replica"
 if __name__ == "__main__":
     main()
