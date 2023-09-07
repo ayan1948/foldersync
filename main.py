@@ -1,12 +1,12 @@
-from typing import BinaryIO, List, Iterable, Type, TypeVar, Callable
-from time import sleep
-from os import remove, walk, scandir
-from os.path import join, exists, relpath
 import argparse
 import hashlib
 import logging
 import sys
 import shutil
+from typing import BinaryIO, List, Iterable, TypeVar, Callable
+from time import sleep
+from os import remove, walk, scandir
+from os.path import join, exists, relpath
 
 T = TypeVar("T", bound=object)
 
@@ -88,18 +88,18 @@ class FileSync:
         for file in source_list:
             if file not in replica_list:
                 shutil.copy2(join(self.source, file), join(self.replica, file))
-                self.logger.info(f"File {file} copied to {self.replica}")
+                self.logger.info(f"File '{file}' copied to '{self.replica}'")
             else:
                 source_file = join(self.source, file)
                 replica_file = join(self.replica, file)
                 if get_hash(open(source_file, "rb")) != get_hash(open(replica_file, "rb")):
                     shutil.copy2(source_file, replica_file)
-                    self.logger.info(f"File {file} copied to {self.replica}")
+                    self.logger.info(f"File '{file}' copied to '{self.replica}'")
 
         for file in replica_list:
             if file not in source_list:
                 remove(join(self.replica, file))
-                self.logger.info(f"File {file} removed from {self.replica}")
+                self.logger.info(f"File '{file}' removed from '{self.replica}'")
 
     def folder_sync(self, source_list: List[str], replica_list: List[str]) -> None:
         """
@@ -112,12 +112,12 @@ class FileSync:
         for folder in source_list:
             if folder not in replica_list:
                 shutil.copytree(join(self.source, folder), join(self.replica, folder))
-                self.logger.info(f"Folder {folder} copied to {self.replica}")
+                self.logger.info(f"Folder '{folder}' copied to '{self.replica}'")
 
         for folder in replica_list:
             if folder not in source_list:
                 shutil.rmtree(join(self.replica, folder))
-                self.logger.info(f"Folder {folder} removed from {self.replica}")
+                self.logger.info(f"Folder '{folder}' removed from '{self.replica}'")
 
     def run_sync(self) -> None:
         """
