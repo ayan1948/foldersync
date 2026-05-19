@@ -3,31 +3,31 @@ import hashlib
 import logging
 import sys
 import shutil
-from typing import BinaryIO, List, Iterable, TypeVar, Callable
+from pathlib import Path
+from typing import TypeVar, Callable
 from time import sleep
-from os import remove, walk, scandir
-from os.path import join, exists, relpath
 
 T = TypeVar("T", bound=object)
 
 
-def get_hash(file: BinaryIO) -> str:
+def get_hash(file_path: Path) -> str:
     """
-    Returns the hash of the file.
-    :param file: File object
+    Returns the MD5 hash of the file.
+    :param file_path: Path to the file.
 
     :return: hexadecimal hash of the file.
     """
     hash_creator = hashlib.md5()
 
-    # Prevents file buffer from overfilling.
-    for byte_block in iter(lambda: file.read(4096), b""):
-        hash_creator.update(byte_block)
+    with file_path.open("rb") as f:
+        # Prevents file buffer from overfilling.
+        for byte_block in iter(lambda: f.read(4096), b""):
+            hash_creator.update(byte_block)
 
     return hash_creator.hexdigest()
 
 
-def initialize_logger(location) -> logging.Logger:
+def initialize_logger(location: str) -> logging.Logger:
     """
     Initializes the logger with a file handler and returns it.
 
@@ -36,9 +36,14 @@ def initialize_logger(location) -> logging.Logger:
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    location = location if location.endswith(".log") else location + "file_sync.log"
-    file_handle = logging.FileHandler(location)
+    log_path = Path(location)
+    if log_path.suffix != ".log":
+        log_path = log_path.with_suffix(".log")
 
+    # Create parent directory if it doesn't exist
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    file_handle = logging.FileHandler(log_path)
     file_handle.setLevel(logging.INFO)
     file_handle.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handle)
@@ -47,17 +52,23 @@ def initialize_logger(location) -> logging.Logger:
 
 def location_check(cls) -> Callable[..., T]:
     """
-    Decorator that checks if the source and replica folders exist.
+    Decorator that checks if the source and replica folders exist and are directories.
     :param cls: Class to be decorated.
 
     :return: object of the class FileSync.
     """
 
-    def inner(*args):
-        for arg in args[:2]:
-            if not exists(arg):
-                raise NotADirectoryError("The locations does not exist.")
-        return cls(*args)
+    def inner(*args, **kwargs):
+        # args[0] is the class 'cls' if used as a class decorator, 
+        # but when called, these are the arguments passed to the constructor.
+        # In main(): FileSync(args.source, args.replica, ...)
+        source_path = Path(args[0])
+        replica_path = Path(args[1])
+        if not source_path.is_dir():
+            raise NotADirectoryError(f"Source directory does not exist or is not a directory: {source_path}")
+        if not replica_path.is_dir():
+            raise NotADirectoryError(f"Replica directory does not exist or is not a directory: {replica_path}")
+        return cls(*args, **kwargs)
 
     return inner
 
@@ -72,8 +83,8 @@ class FileSync:
         :param log: Log file.
         :param time: Interval between syncs.
         """
-        self.source = source
-        self.replica = replica
+        self.source = Path(source)
+        self.replica = Path(replica)
         self.logger = initialize_logger(log)
         self.interval = time
 
@@ -81,86 +92,79 @@ class FileSync:
         print(message)
         self.logger.info(message)
 
-    def content_sync(self, source_list: List[str], replica_list: List[str]) -> None:
-        """
-        Synchronizes the content of the source and replica folders.
-        :param source_list: list of files in the source folder.
-        :param replica_list: list of files in the replica folder.
-
-        :return: None
-        """
-        for file in source_list:
-            if file not in replica_list:
-                shutil.copy2(join(self.source, file), join(self.replica, file))
-                self.print_and_log(f"File '{file}' copied to '{self.replica}'")
-            else:
-                source_file = join(self.source, file)
-                replica_file = join(self.replica, file)
-                if get_hash(open(source_file, "rb")) != get_hash(open(replica_file, "rb")):
-                    shutil.copy2(source_file, replica_file)
-                    self.print_and_log(f"File '{file}' copied to '{self.replica}'")
-
-        for file in replica_list:
-            if file not in source_list:
-                remove(join(self.replica, file))
-                self.print_and_log(f"File '{file}' removed from '{self.replica}'")
-
-    def folder_sync(self, source_list: List[str], replica_list: List[str]) -> None:
-        """
-        Synchronizes the folders in the source and replica folders.
-        :param source_list: list of folders in the source folder.
-        :param replica_list: list of folders in the replica folder.
-
-        :return: None
-        """
-        for folder in source_list:
-            if folder not in replica_list:
-                shutil.copytree(join(self.source, folder), join(self.replica, folder))
-                self.print_and_log(f"Folder '{folder}' copied to '{self.replica}'")
-
-        for folder in replica_list:
-            if folder not in source_list:
-                shutil.rmtree(join(self.replica, folder))
-                self.print_and_log(f"Folder '{folder}' removed from '{self.replica}'")
-
     def run_sync(self) -> None:
         """
         Runs the sync operation for the whole directory.
         :return: None
         """
-        for source_dir, source_sub_dirs, source_files in walk(self.source, topdown=True):
-            relative_dir = relpath(source_dir, self.source)
-            replica_dir = source_dir.replace(self.source, self.replica)
+        source_files = set(
+            map(lambda p: p.relative_to(self.source),
+                filter(lambda p: p.is_file(), self.source.rglob("*")))
+        )
+        replica_files = set(
+            map(lambda p: p.relative_to(self.replica),
+                filter(lambda p: p.is_file(), self.replica.rglob("*")))
+        )
 
-            if not exists(replica_dir):
-                shutil.copytree(source_dir, replica_dir)
-                self.print_and_log(f"Folder {relative_dir} copied to {self.replica}")
+        # Sync files
+        for file_rel in source_files:
+            source_file = self.source / file_rel
+            replica_file = self.replica / file_rel
 
-            file_iter: Iterable[object] = filter(lambda item: item.is_file(), scandir(replica_dir))
-            replica_sub_files = list(map(lambda item: join(relative_dir, item.name), file_iter))
-            source_files_path = list(map(lambda item: join(relative_dir, item), source_files))
+            if file_rel not in replica_files:
+                self.print_and_log(f"Copying new file: {file_rel}")
+                replica_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_file, replica_file)
+            elif get_hash(source_file) != get_hash(replica_file):
+                self.print_and_log(f"Updating file: {file_rel}")
+                shutil.copy2(source_file, replica_file)
 
-            folder_iter: Iterable[object] = filter(lambda item: item.is_dir(), scandir(replica_dir))
-            replica_sub_dirs = list(map(lambda item: join(relative_dir, item.name), folder_iter))
-            source_dir_path = list(map(lambda item: join(relative_dir, item), source_sub_dirs))
+        for file_rel in replica_files - source_files:
+            self.print_and_log(f"Removing file: {file_rel}")
+            (self.replica / file_rel).unlink()
 
-            self.folder_sync(source_dir_path, replica_sub_dirs)
-            self.content_sync(source_files_path, replica_sub_files)
+        # Sync directories
+        source_dirs = set(
+            map(lambda p: p.relative_to(self.source),
+                filter(lambda p: p.is_dir(), self.source.rglob("*")))
+        )
+        replica_dirs = set(
+            map(lambda p: p.relative_to(self.replica),
+                filter(lambda p: p.is_dir(), self.replica.rglob("*")))
+        )
+
+        # Create missing directories
+        for dir_rel in source_dirs - replica_dirs:
+            self.print_and_log(f"Creating directory: {dir_rel}")
+            (self.replica / dir_rel).mkdir(parents=True, exist_ok=True)
+
+        # Remove deleted directories (in reverse order to handle nested empty dirs)
+        for dir_rel in sorted(replica_dirs - source_dirs, reverse=True):
+            self.print_and_log(f"Removing directory: {dir_rel}")
+            shutil.rmtree(self.replica / dir_rel)
 
     def sync(self) -> None:
         """
-        Synchronizes the source and replica folders.
+        Synchronizes the source and replica folders continuously.
 
         :return: None
         """
         counter = 0
         try:
-            while counter < 3:
+            while True:
                 try:
+                    self.print_and_log("--- Starting sync cycle ---")
                     self.run_sync()
+                    self.print_and_log("--- Sync cycle finished ---")
                 except PermissionError:
-                    self.print_and_log("Permission denied...")
+                    self.print_and_log("Permission denied. Retrying...")
                     counter += 1
+                    if counter >= 3:
+                        self.print_and_log("Permission denied multiple times. Exiting.")
+                        break
+                except Exception as e:
+                    self.print_and_log(f"An error occurred: {e}")
+
                 sleep(self.interval)
         except KeyboardInterrupt:
             self.print_and_log("Stopping file sync...")
@@ -171,13 +175,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Syncs two folders. Usage: python main.py source replica")
     parser.add_argument("source", help="Source folder")
     parser.add_argument("replica", help="Replica folder")
-    parser.add_argument("-t", "--time", help="sync time is [s]", type=int, default=1)
-    parser.add_argument("-l", "--log", help="log file", type=str, default="file_sync.log")
+    parser.add_argument("-t", "--time", help="sync time in seconds", type=int, default=1)
+    parser.add_argument("-l", "--log", help="log file path", type=str, default="file_sync.log")
     args = parser.parse_args()
-    sync = FileSync(args.source, args.replica, args.log, args.time)
-    sync.sync()
+
+    try:
+        sync = FileSync(args.source, args.replica, args.log, args.time)
+        sync.sync()
+    except NotADirectoryError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
-# main.py "C:\Users\%User%\Downloads\Documents" "C:\Users\%User%\Downloads\doc_replica"
 if __name__ == "__main__":
     main()
